@@ -1,5 +1,5 @@
 builds:
-- dir: cmd
+- dir: .
   goos:
   - linux
   - windows
