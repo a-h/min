@@ -141,6 +141,10 @@ func readLines(fn string) (lines []string, err error) {
 	return
 }
 
+var defaultStyle = tcell.StyleDefault.
+	Foreground(tcell.ColorWhite).
+	Background(tcell.ColorBlack)
+
 func main() {
 	// Configure the context to handle SIGINT.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -222,9 +226,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer s.Fini()
-	s.SetStyle(tcell.StyleDefault.
-		Foreground(tcell.ColorWhite).
-		Background(tcell.ColorBlack))
+	s.SetStyle(defaultStyle)
 	state.Screen = s
 	Run(ctx, state)
 }
@@ -553,7 +555,7 @@ func NewText(s tcell.Screen, text string) *Text {
 		Screen: s,
 		X:      0,
 		Y:      0,
-		Style:  tcell.StyleDefault,
+		Style:  defaultStyle,
 		Text:   text,
 	}
 }
@@ -622,7 +624,7 @@ func NewOptions(s tcell.Screen, msg string, opts ...string) *Options {
 	}
 	return &Options{
 		Screen:      s,
-		Style:       tcell.StyleDefault,
+		Style:       defaultStyle,
 		Message:     msg,
 		Options:     opts,
 		CancelIndex: cancelIndex,
@@ -645,9 +647,9 @@ func (o *Options) Draw() {
 	t := NewText(o.Screen, o.Message)
 	_, y := t.Draw()
 	for i, oo := range o.Options {
-		style := tcell.StyleDefault
+		style := defaultStyle
 		if i == o.ActiveIndex {
-			style = tcell.StyleDefault.Background(tcell.ColorLightGray)
+			style = defaultStyle.Background(tcell.ColorLightGray)
 		}
 		NewText(o.Screen, fmt.Sprintf("[ %s ]", oo)).WithOffset(1, i+y+2).WithStyle(style).Draw()
 	}
@@ -780,7 +782,7 @@ func (l PreformattedTextLine) Draw(to tcell.Screen, atX, atY int, highlighted bo
 			c = ' '
 			w = 1
 		}
-		to.SetContent(atX, atY, c, comb, tcell.StyleDefault)
+		to.SetContent(atX, atY, c, comb, defaultStyle)
 		atX += w
 	}
 	return atX, atY
@@ -806,7 +808,7 @@ func (l LinkLine) URL(relativeTo *url.URL) (u *url.URL, err error) {
 }
 
 func (l LinkLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y int) {
-	ls := tcell.StyleDefault.Foreground(tcell.ColorDarkCyan)
+	ls := defaultStyle.Foreground(tcell.ColorDarkCyan)
 	if highlighted {
 		ls = ls.Background(tcell.ColorWhite).Foreground(tcell.ColorDarkCyan)
 	}
@@ -819,7 +821,7 @@ type HeadingLine struct {
 }
 
 func (l HeadingLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y int) {
-	return NewText(to, l.Text).WithOffset(atX, atY).WithMaxWidth(l.MaxWidth).WithStyle(tcell.StyleDefault.Foreground(tcell.ColorGreen)).Draw()
+	return NewText(to, l.Text).WithOffset(atX, atY).WithMaxWidth(l.MaxWidth).WithStyle(defaultStyle.Foreground(tcell.ColorGreen)).Draw()
 }
 
 type UnorderedListItemLine struct {
@@ -837,7 +839,7 @@ type QuoteLine struct {
 }
 
 func (l QuoteLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y int) {
-	return NewText(to, l.Text).WithOffset(atX+2, atY).WithMaxWidth(l.MaxWidth).WithStyle(tcell.StyleDefault.Foreground(tcell.ColorLightGrey)).Draw()
+	return NewText(to, l.Text).WithOffset(atX+2, atY).WithMaxWidth(l.MaxWidth).WithStyle(defaultStyle.Foreground(tcell.ColorLightGrey)).Draw()
 }
 
 func NewBrowser(s tcell.Screen, w int, u *url.URL, resp *gemini.Response) (b *Browser, err error) {
@@ -1282,7 +1284,7 @@ func NewInput(s tcell.Screen, msg, text string) *Input {
 		Screen:      s,
 		X:           0,
 		Y:           0,
-		Style:       tcell.StyleDefault,
+		Style:       defaultStyle,
 		Message:     msg,
 		Text:        text,
 		CursorIndex: len(text),
@@ -1304,25 +1306,23 @@ func (o *Input) Draw() {
 	o.Screen.Clear()
 	_, y := NewText(o.Screen, o.Message).WithOffset(o.X, o.Y).WithStyle(o.Style).Draw()
 
-	defaultStyle := tcell.StyleDefault
-	activeStyle := tcell.StyleDefault.Background(tcell.ColorLightGray)
-
-	textStyle := defaultStyle
 	if o.ActiveIndex == 0 {
 		NewText(o.Screen, ">").WithOffset(o.X, o.Y+y+2).WithStyle(defaultStyle).Draw()
 	}
-	NewText(o.Screen, o.Text).WithOffset(o.X+2, o.Y+y+2).WithStyle(textStyle).Draw()
+	NewText(o.Screen, o.Text).WithOffset(o.X+2, o.Y+y+2).WithStyle(defaultStyle).Draw()
 	if o.ActiveIndex == 0 {
 		o.Screen.ShowCursor(o.X+2+o.CursorIndex, o.Y+y+2)
 	} else {
 		o.Screen.HideCursor()
 	}
 
+	activeStyle := defaultStyle.Background(tcell.ColorLightGray)
 	okStyle := defaultStyle
 	if o.ActiveIndex == 1 {
 		okStyle = activeStyle
 	}
 	NewText(o.Screen, "[ OK ]").WithOffset(1, o.Y+y+4).WithStyle(okStyle).Draw()
+
 	cancelStyle := defaultStyle
 	if o.ActiveIndex == 2 {
 		cancelStyle = activeStyle
