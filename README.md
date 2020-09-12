@@ -4,10 +4,13 @@ A Gemini browser for your terminal.
 
 <img src="demo.gif"/>
 
+## Installation
+
+Download the compiled binary for your platform at https://github.com/a-h/min/releases
+
 ## Features
 
 * Vim style keyboard navigation
-* Easy to understand implementation - one file, 1500 lines
 * Client certificate support
 * History (saved to TSV file)
 * Bookmarks (saved to TSV file)
