@@ -1,7 +1,5 @@
-before:
-  hooks:
-    - go mod download
 builds:
+- dir: cmd
   goos:
   - linux
   - windows
