@@ -277,6 +277,16 @@ func Run(ctx context.Context, state *State) {
 			}
 			continue
 		}
+		if action == ActionGoBack {
+			state.History.Back()
+			action = ActionDisplay
+			continue
+		}
+		if action == ActionGoForward {
+			state.History.Forward()
+			action = ActionDisplay
+			continue
+		}
 		if action == ActionViewBookmarks || action == ActionViewHelp || action == ActionViewHistory {
 			var vu *url.URL
 			var vr *gemini.Response
@@ -358,12 +368,7 @@ func Run(ctx context.Context, state *State) {
 				break
 			}
 			if resp == nil {
-				state.History.Back()
-				if state.History.Current() == nil {
-					action = ActionHome
-					continue
-				}
-				action = ActionDisplay
+				action = ActionGoBack
 				continue
 			}
 			if strings.HasPrefix(string(resp.Header.Code), "3") { // Redirect
@@ -374,13 +379,13 @@ func Run(ctx context.Context, state *State) {
 						action = ActionNavigate
 						continue
 					}
-					action = ActionAskForURL
+					action = ActionDisplay
 					continue
 				}
 				redirectTo, err := url.Parse(resp.Header.Meta)
 				if err != nil {
 					NewOptions(state.Screen, fmt.Sprintf("The server returned an invalid redirect URL\n\nURL: %v\nCode: %v\nMeta: %s", u.String(), resp.Header.Code, resp.Header.Meta), "Cancel").Focus()
-					action = ActionNavigate
+					action = ActionDisplay
 					continue
 				}
 				// Check with the user if the redirect is to another protocol or domain.
@@ -389,7 +394,7 @@ func Run(ctx context.Context, state *State) {
 					if open := NewOptions(state.Screen, fmt.Sprintf("Follow non-gemini redirect?\n\n %v", redirectTo.String()), "Yes", "No").Focus(); open == "Yes" {
 						browser.OpenURL(redirectTo.String())
 					}
-					action = ActionNavigate
+					action = ActionDisplay
 					continue
 				}
 				if redirectTo.Host != u.Host {
@@ -408,7 +413,7 @@ func Run(ctx context.Context, state *State) {
 				msg := fmt.Sprintf("The server has requested a certificate\n\nURL: %s\nCode: %s\nMeta: %s", u.String(), resp.Header.Code, resp.Header.Meta)
 				certificateOption := NewOptions(state.Screen, msg, "Create (Permanent)", "Create (Temporary)", "Cancel").Focus()
 				if certificateOption == "Cancel" {
-					action = ActionAskForURL
+					action = ActionDisplay
 					continue
 				}
 				permanent := strings.Contains(certificateOption, "Permanent")
@@ -420,7 +425,7 @@ func Run(ctx context.Context, state *State) {
 				keyPair, err := tls.X509KeyPair(cert, key)
 				if err != nil {
 					NewOptions(state.Screen, fmt.Sprintf("Error creating certificate: %v", err), "Continue").Focus()
-					action = ActionAskForURL
+					action = ActionDisplay
 					continue
 				}
 				prefix := ClientCertPrefix(u.Scheme + "://" + u.Host + u.Path)
@@ -428,13 +433,13 @@ func Run(ctx context.Context, state *State) {
 				if permanent {
 					if err = prefix.Save(cert, key); err != nil {
 						NewOptions(state.Screen, fmt.Sprintf("Error saving certificate: %v", err), "Continue").Focus()
-						action = ActionAskForURL
+						action = ActionDisplay
 						continue
 					}
 					state.Conf.ClientCertPrefixes[prefix] = struct{}{}
 					if err = state.Conf.Save(); err != nil {
 						NewOptions(state.Screen, fmt.Sprintf("Error saving configuration: %v", err), "Continue").Focus()
-						action = ActionAskForURL
+						action = ActionDisplay
 						continue
 					}
 				}
@@ -444,6 +449,7 @@ func Run(ctx context.Context, state *State) {
 			if strings.HasPrefix(string(resp.Header.Code), "1") { // Input
 				text, ok := NewInput(state.Screen, resp.Header.Meta, "").Focus()
 				if !ok {
+					action = ActionDisplay
 					continue
 				}
 				// Post the input back.
@@ -456,7 +462,7 @@ func Run(ctx context.Context, state *State) {
 				b, err := NewBrowser(state.Screen, state.Conf.Width, u, resp)
 				if err != nil {
 					NewOptions(state.Screen, fmt.Sprintf("Error displaying server response: %v", err), "OK").Focus()
-					action = ActionAskForURL
+					action = ActionDisplay
 					continue
 				}
 				if err = state.History.Add(b); err != nil {
@@ -466,23 +472,21 @@ func Run(ctx context.Context, state *State) {
 				continue
 			}
 			NewOptions(state.Screen, fmt.Sprintf("Error returned by server\n\nURL: %v\nCode: %v\nMeta: %s", u.String(), resp.Header.Code, resp.Header.Meta), "OK").Focus()
-			action = ActionAskForURL
+			action = ActionDisplay
+			continue
 		}
 		if action == ActionDisplay {
-			browserAction, navigateTo, err := state.History.Current().Focus()
-			if err != nil {
-				NewOptions(state.Screen, fmt.Sprintf("Error processing link returned by server\n\nLink: %v\nMessage: %v", navigateTo, err), "OK").Focus()
-				action = ActionAskForURL
+			if state.History.Current() == nil {
+				action = ActionHome
 				continue
 			}
-			switch browserAction {
-			case ActionGoBack:
-				state.History.Back()
+			browserAction, navigateTo, err := state.History.Current().Focus()
+			if err != nil {
+				NewOptions(state.Screen, fmt.Sprintf("Error displaying URL\n\nURL: %v\nMessage: %v", navigateTo, err), "OK").Focus()
+				action = ActionGoBack
 				continue
-			case ActionGoForward:
-				state.History.Forward()
-				continue
-			case ActionNavigate:
+			}
+			if browserAction == ActionNavigate {
 				if navigateTo != nil {
 					if navigateTo.Scheme != "gemini" {
 						if open := NewOptions(state.Screen, fmt.Sprintf("Open in browser?\n\n %v", navigateTo.String()), "Yes", "No").Focus(); open == "Yes" {
@@ -493,8 +497,6 @@ func Run(ctx context.Context, state *State) {
 					}
 					state.URL = navigateTo.String()
 					u = navigateTo
-					action = ActionNavigate
-					continue
 				}
 			}
 			action = browserAction
