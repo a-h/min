@@ -794,10 +794,14 @@ type LinkLine struct {
 }
 
 func (l LinkLine) URL(relativeTo *url.URL) (u *url.URL, err error) {
-	urlString := strings.TrimPrefix(l.Text, "=>")
-	urlString = strings.TrimSpace(urlString)
-	urlString = strings.SplitN(urlString, " ", 2)[0]
-	u, err = url.Parse(urlString)
+	var urlString []rune
+	for _, r := range strings.TrimSpace(strings.TrimPrefix(l.Text, "=>")) {
+		if unicode.IsSpace(r) {
+			break
+		}
+		urlString = append(urlString, r)
+	}
+	u, err = url.Parse(string(urlString))
 	if err != nil {
 		return
 	}
