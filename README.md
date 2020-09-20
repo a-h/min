@@ -8,6 +8,8 @@ A Gemini browser for your terminal.
 
 Download the compiled binary for your platform at https://github.com/a-h/min/releases
 
+If you're using a Raspberry Pi you probably want the ARM v6 binary, even if you're on a Pi 4. I've tested the ARM v6 build on a Pi Zero running Raspbian, and a Pi 4 running Ubuntu and it worked without problems there.
+
 ## Features
 
 * Vim style keyboard navigation
