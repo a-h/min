@@ -12,6 +12,7 @@ import (
 	"io/ioutil"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path"
 	"sort"
@@ -253,6 +254,8 @@ const (
 	ActionGoBack         Action = "Back"
 	ActionGoForward      Action = "Forward"
 	ActionViewHelp       Action = "Help"
+
+	BrowserActionEdit Action = "Edit"
 )
 
 func Run(ctx context.Context, state *State) {
@@ -486,13 +489,37 @@ func Run(ctx context.Context, state *State) {
 				action = ActionGoBack
 				continue
 			}
+			if browserAction == BrowserActionEdit {
+				editor := os.Getenv("EDITOR")
+				if editor == "" {
+					editor = "vim"
+				}
+				executable, err := exec.LookPath(editor)
+				if err != nil {
+					NewOptions(state.Screen, fmt.Sprintf("Error finding $EDITOR (%q) in path: %v", editor, err), "OK").Focus()
+					action = ActionGoBack
+					continue
+				}
+				//TODO: Write the contents of the response to disk, then open it.
+				//TODO: Use the right extension for the MIME type. The MIME type should be accessible from the Gemini response.
+				f, err := ioutil.TempFile("", "min*.gmi")
+				io.Copy(f, state.History.Current().ResponseBody)
+				f.Close()
+				cmd := exec.Command(executable, f.Name())
+				cmd.Stdin = os.Stdin
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+				cmd.Run()
+				action = ActionDisplay
+				continue
+			}
 			if browserAction == ActionNavigate {
 				if navigateTo != nil {
 					if navigateTo.Scheme != "gemini" {
 						if open := NewOptions(state.Screen, fmt.Sprintf("Open in browser?\n\n %v", navigateTo.String()), "Yes", "No").Focus(); open == "Yes" {
 							browser.OpenURL(navigateTo.String())
 						}
-						state.History.Back()
+						browserAction = ActionDisplay
 						continue
 					}
 					state.URL = navigateTo.String()
@@ -703,15 +730,17 @@ func (o *Options) Focus() string {
 	}
 }
 
-func NewLineConverter(resp *gemini.Response, width int) *LineConverter {
+func NewLineConverter(header *gemini.Header, body io.Reader, width int) *LineConverter {
 	return &LineConverter{
-		Response: resp,
+		Header:   header,
+		Body:     body,
 		MaxWidth: width,
 	}
 }
 
 type LineConverter struct {
-	Response     *gemini.Response
+	Header       *gemini.Header
+	Body         io.Reader
 	MaxWidth     int
 	preFormatted bool
 }
@@ -740,7 +769,7 @@ func (lc *LineConverter) process(s string) (l Line, isVisualLine bool) {
 }
 
 func (lc *LineConverter) Lines() (lines []Line, err error) {
-	reader := bufio.NewReader(lc.Response.Body)
+	reader := bufio.NewReader(lc.Body)
 	var s string
 	for {
 		s, err = reader.ReadString('\n')
@@ -853,13 +882,17 @@ func NewBrowser(s tcell.Screen, w int, u *url.URL, resp *gemini.Response) (b *Br
 		Screen:          s,
 		URL:             u,
 		ResponseHeader:  resp.Header,
+		ResponseBody:    new(bytes.Buffer),
 		ActiveLineIndex: -1,
 	}
+	// Copy the body to the browser.
+	tr := io.TeeReader(resp.Body, b.ResponseBody)
+	defer resp.Body.Close()
 	maxWidth, _ := s.Size()
 	if maxWidth > w {
 		maxWidth = w
 	}
-	b.Lines, err = NewLineConverter(resp, maxWidth).Lines()
+	b.Lines, err = NewLineConverter(resp.Header, tr, maxWidth).Lines()
 	b.calculateLinkIndices()
 	return
 }
@@ -868,6 +901,7 @@ type Browser struct {
 	Screen          tcell.Screen
 	URL             *url.URL
 	ResponseHeader  *gemini.Header
+	ResponseBody    *bytes.Buffer
 	Lines           []Line
 	ScrollX         int
 	MinScrollX      int
@@ -1046,6 +1080,12 @@ func (b *Browser) Focus() (next Action, navigateTo *url.URL, err error) {
 					return
 				case 'B':
 					next = ActionViewBookmarks
+					return
+				case 'E':
+					next = BrowserActionEdit
+					return
+				case 'o':
+					next = ActionAskForURL
 					return
 				case 'g':
 					b.ScrollY = 0
@@ -1476,6 +1516,8 @@ Esc              Exit
 b                Toggle bookmark
 B                View bookmarks
 Ctrl-H           View history
+o		 Prompt for a URL (open)
+E                Edit the current file in $EDITOR
 ?                View help
 
 ## Scrolling
