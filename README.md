@@ -56,7 +56,10 @@ Ctrl-D           Scroll down half a screen
 
 ### config.ini
 
-* Stored at $HOME/.min/config.ini
+* Stored in your operating system's default config location under .min, e.g. 
+  * Linux: $HOME/config/.min/config.ini
+  * Mac: ~/Library/Application Support/.min/config.ini
+  * Windows: %AppData%/.min/config.ini
 * Consists of key/value pairs (e.g. "width=80")
 * Contains previously accepted server certificates
 * Contains links to client certificates, stored in the same directory

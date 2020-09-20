@@ -52,8 +52,8 @@ func (cc ClientCertPrefix) Save(cert, key []byte) error {
 }
 
 var configPath = func() string {
-	home, _ := os.UserHomeDir()
-	return path.Join(home, ".min")
+	configPath, _ := os.UserConfigDir()
+	return path.Join(configPath, ".min")
 }()
 
 type Config struct {
@@ -76,7 +76,6 @@ func (c *Config) Save() error {
 		fmt.Fprintf(b, "hostcert/%v=%v\n", host, cert)
 	}
 	fn := path.Join(configPath, "config.ini")
-	os.MkdirAll(path.Dir(fn), os.ModePerm)
 	return atomic.WriteFile(fn, b)
 }
 
@@ -88,6 +87,7 @@ func NewConfig() (c *Config, err error) {
 		HostCertificates:   map[string]string{},
 		ClientCertPrefixes: map[ClientCertPrefix]struct{}{},
 	}
+	os.MkdirAll(configPath, os.ModePerm)
 	lines, err := readLines(path.Join(configPath, "config.ini"))
 	if err != nil {
 		return
