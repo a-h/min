@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"mime"
 	"net/url"
 	"os"
 	"os/signal"
@@ -27,6 +28,8 @@ import (
 	"github.com/mattn/go-runewidth"
 	"github.com/natefinch/atomic"
 	"github.com/pkg/browser"
+	"golang.org/x/text/encoding/ianaindex"
+	"golang.org/x/text/transform"
 )
 
 type ClientCertPrefix string
@@ -192,6 +195,7 @@ func main() {
 		History:   h,
 		Bookmarks: b,
 		Conf:      conf,
+		Context:   ctx,
 	}
 
 	// Use a URL passed via the command-line URL, if provided.
@@ -228,16 +232,20 @@ func main() {
 	defer s.Fini()
 	s.SetStyle(defaultStyle)
 	state.Screen = s
-	Run(ctx, state)
+	run(state)
 }
 
 type State struct {
-	URL       string
-	History   *History
-	Bookmarks *Bookmarks
-	Screen    tcell.Screen
-	Client    *gemini.Client
-	Conf      *Config
+	URL           string
+	History       *History
+	Bookmarks     *Bookmarks
+	Screen        tcell.Screen
+	Client        *gemini.Client
+	Conf          *Config
+	RedirectCount int
+	U             *url.URL
+	Response      *gemini.Response
+	Context       context.Context
 }
 
 type Action string
@@ -253,256 +261,319 @@ const (
 	ActionGoBack         Action = "Back"
 	ActionGoForward      Action = "Forward"
 	ActionViewHelp       Action = "Help"
+	ActionExit           Action = "Exit"
 )
 
-func Run(ctx context.Context, state *State) {
+func run(state *State) {
 	var action Action
-	var redirectCount int
-	var ok bool
-	var err error
-	var u *url.URL
 	for {
-		if action == ActionHome {
-			switch NewOptions(state.Screen, "Welcome to the min browser", "Enter URL", "View History", "View Bookmarks", "Help", "Exit").Focus() {
-			case "Enter URL":
-				action = ActionAskForURL
-			case "View History":
-				action = ActionViewHistory
-			case "View Bookmarks":
-				action = ActionViewBookmarks
-			case "Help":
-				action = ActionViewHelp
-			case "Exit":
-				return
-			}
-			continue
-		}
-		if action == ActionGoBack {
+		switch action {
+		case ActionExit:
+			return
+		case ActionHome:
+			action = handleActionHome(state)
+		case ActionGoBack:
 			state.History.Back()
 			action = ActionDisplay
-			continue
-		}
-		if action == ActionGoForward {
+		case ActionGoForward:
 			state.History.Forward()
 			action = ActionDisplay
-			continue
-		}
-		if action == ActionViewBookmarks || action == ActionViewHelp || action == ActionViewHistory {
-			var vu *url.URL
-			var vr *gemini.Response
-			switch action {
-			case ActionViewHistory:
-				vu, vr = state.History.All()
-			case ActionViewBookmarks:
-				vu, vr = state.Bookmarks.All()
-			case ActionViewHelp:
-				vu, vr = Help()
-			}
-			b, err := NewBrowser(state.Screen, state.Conf.Width, vu, vr)
-			if err != nil {
-				NewOptions(state.Screen, fmt.Sprintf("Error loading %v: %v", b.URL.String(), err), "Continue").Focus()
-				continue
-			}
-			if err = state.History.Add(b); err != nil {
-				NewOptions(state.Screen, fmt.Sprintf("Unable to persist history to disk: %v", err), "OK").Focus()
-			}
-			action = ActionDisplay
-			continue
-		}
-		if action == ActionToggleBookmark {
-			if state.Bookmarks.Contains(u) {
-				if NewOptions(state.Screen, fmt.Sprintf("Remove bookmark: %v", u), "Yes", "No").Focus() == "Yes" {
-					state.Bookmarks.Remove(u)
-				}
-			} else {
-				if NewOptions(state.Screen, fmt.Sprintf("Add bookmark: %v", u), "Yes", "No").Focus() == "Yes" {
-					state.Bookmarks.Add(u)
-				}
-			}
-			action = ActionDisplay
-		}
-		if action == ActionAskForURL {
-			state.URL, ok = NewInput(state.Screen, "Enter URL:", state.URL).Focus()
-			if !ok {
-				action = ActionHome
-				continue
-			}
-			u, err = url.Parse(state.URL)
-			if err != nil {
-				NewOptions(state.Screen, fmt.Sprintf("Error parsing URL\n\nURL: %v\nMessage: %v", state.URL, err), "Continue").Focus()
-				action = ActionAskForURL
-				continue
-			}
-			action = ActionNavigate
-			continue
-		}
-		if action == ActionNavigate {
-			var resp *gemini.Response
-			var certificates []string
-		out:
-			for {
-				resp, certificates, _, ok, err = state.Client.RequestURL(ctx, u)
-				if err != nil {
-					switch NewOptions(state.Screen, fmt.Sprintf("Error making request\n\nURL: %v\nMessage: %v", u, err), "Retry", "Cancel").Focus() {
-					case "Retry":
-						continue
-					case "Cancel":
-						break out
-					}
-				}
-				if !ok {
-					// TOFU check required.
-					switch NewOptions(state.Screen, fmt.Sprintf("Accept server certificate?\n  %v", certificates[0]), "Accept (Permanent)", "Accept (Temporary)", "Reject").Focus() {
-					case "Accept (Permanent)":
-						state.Conf.HostCertificates[u.Host] = certificates[0]
-						state.Conf.Save()
-						state.Client.AddServerCertificate(u.Host, certificates[0])
-						continue
-					case "Accept (Temporary)":
-						state.Client.AddServerCertificate(u.Host, certificates[0])
-						continue
-					case "Reject":
-						break out
-					}
-				}
-				break
-			}
-			if resp == nil {
-				action = ActionGoBack
-				continue
-			}
-			if strings.HasPrefix(string(resp.Header.Code), "3") { // Redirect
-				redirectCount++
-				if redirectCount >= 5 {
-					if keepTrying := NewOptions(state.Screen, fmt.Sprintf("The server issued 5 redirects, keep trying?"), "Keep Trying", "Cancel").Focus(); keepTrying == "Keep Trying" {
-						redirectCount = 0
-						action = ActionNavigate
-						continue
-					}
-					action = ActionDisplay
-					continue
-				}
-				redirectTo, err := url.Parse(resp.Header.Meta)
-				if err != nil {
-					NewOptions(state.Screen, fmt.Sprintf("The server returned an invalid redirect URL\n\nURL: %v\nCode: %v\nMeta: %s", u.String(), resp.Header.Code, resp.Header.Meta), "Cancel").Focus()
-					action = ActionDisplay
-					continue
-				}
-				// Check with the user if the redirect is to another protocol or domain.
-				redirectTo = u.ResolveReference(redirectTo)
-				if redirectTo.Scheme != "gemini" {
-					if open := NewOptions(state.Screen, fmt.Sprintf("Follow non-gemini redirect?\n\n %v", redirectTo.String()), "Yes", "No").Focus(); open == "Yes" {
-						browser.OpenURL(redirectTo.String())
-					}
-					action = ActionDisplay
-					continue
-				}
-				if redirectTo.Host != u.Host {
-					if open := NewOptions(state.Screen, fmt.Sprintf("Follow cross-domain redirect?\n\n %v", redirectTo.String()), "Yes", "No").Focus(); open == "No" {
-						action = ActionAskForURL
-						continue
-					}
-				}
-				state.URL = redirectTo.String()
-				u = redirectTo
-				action = ActionNavigate
-				continue
-			}
-			redirectCount = 0
-			if strings.HasPrefix(string(resp.Header.Code), "6") { // Client certificate required
-				msg := fmt.Sprintf("The server has requested a certificate\n\nURL: %s\nCode: %s\nMeta: %s", u.String(), resp.Header.Code, resp.Header.Meta)
-				certificateOption := NewOptions(state.Screen, msg, "Create (Permanent)", "Create (Temporary)", "Cancel").Focus()
-				if certificateOption == "Cancel" {
-					action = ActionDisplay
-					continue
-				}
-				permanent := strings.Contains(certificateOption, "Permanent")
-				duration := time.Hour * 24
-				if permanent {
-					duration *= 365 * 200
-				}
-				cert, key, _ := cert.Generate("", "", "", duration)
-				keyPair, err := tls.X509KeyPair(cert, key)
-				if err != nil {
-					NewOptions(state.Screen, fmt.Sprintf("Error creating certificate: %v", err), "Continue").Focus()
-					action = ActionDisplay
-					continue
-				}
-				prefix := ClientCertPrefix(u.Scheme + "://" + u.Host + u.Path)
-				state.Client.AddClientCertificate(string(prefix), keyPair)
-				if permanent {
-					if err = prefix.Save(cert, key); err != nil {
-						NewOptions(state.Screen, fmt.Sprintf("Error saving certificate: %v", err), "Continue").Focus()
-						action = ActionDisplay
-						continue
-					}
-					state.Conf.ClientCertPrefixes[prefix] = struct{}{}
-					if err = state.Conf.Save(); err != nil {
-						NewOptions(state.Screen, fmt.Sprintf("Error saving configuration: %v", err), "Continue").Focus()
-						action = ActionDisplay
-						continue
-					}
-				}
-				action = ActionNavigate
-				continue
-			}
-			if strings.HasPrefix(string(resp.Header.Code), "1") { // Input
-				text, ok := NewInput(state.Screen, resp.Header.Meta, "").Focus()
-				if !ok {
-					action = ActionDisplay
-					continue
-				}
-				// Post the input back.
-				u.RawQuery = url.QueryEscape(text)
-				state.URL = u.String()
-				action = ActionNavigate
-				continue
-			}
-			if strings.HasPrefix(string(resp.Header.Code), "2") { // Success
-				b, err := NewBrowser(state.Screen, state.Conf.Width, u, resp)
-				if err != nil {
-					NewOptions(state.Screen, fmt.Sprintf("Error displaying server response: %v", err), "OK").Focus()
-					action = ActionDisplay
-					continue
-				}
-				if err = state.History.Add(b); err != nil {
-					NewOptions(state.Screen, fmt.Sprintf("Unable to persist history to disk: %v", err), "OK").Focus()
-				}
-				action = ActionDisplay
-				continue
-			}
-			NewOptions(state.Screen, fmt.Sprintf("Error returned by server\n\nURL: %v\nCode: %v\nMeta: %s", u.String(), resp.Header.Code, resp.Header.Meta), "OK").Focus()
-			action = ActionDisplay
-			continue
-		}
-		if action == ActionDisplay {
-			if state.History.Current() == nil {
-				action = ActionHome
-				continue
-			}
-			browserAction, navigateTo, err := state.History.Current().Focus()
-			if err != nil {
-				NewOptions(state.Screen, fmt.Sprintf("Error displaying URL\n\nURL: %v\nMessage: %v", navigateTo, err), "OK").Focus()
-				action = ActionGoBack
-				continue
-			}
-			if browserAction == ActionNavigate {
-				if navigateTo != nil {
-					if navigateTo.Scheme != "gemini" {
-						if open := NewOptions(state.Screen, fmt.Sprintf("Open in browser?\n\n %v", navigateTo.String()), "Yes", "No").Focus(); open == "Yes" {
-							browser.OpenURL(navigateTo.String())
-						}
-						state.History.Back()
-						continue
-					}
-					state.URL = navigateTo.String()
-					u = navigateTo
-				}
-			}
-			action = browserAction
-			continue
+		case ActionViewBookmarks:
+			action = handleActionView(state, action)
+		case ActionViewHelp:
+			action = handleActionView(state, action)
+		case ActionViewHistory:
+			action = handleActionView(state, action)
+		case ActionToggleBookmark:
+			action = handleActionToggleBookmark(state)
+		case ActionAskForURL:
+			action = handleActionAskForURL(state)
+		case ActionNavigate:
+			action = handleActionNavigate(state)
+		case ActionDisplay:
+			action = handleActionDisplay(state)
 		}
 	}
+}
+
+func handleActionHome(state *State) Action {
+	switch NewOptions(state.Screen, "Welcome to the min browser", "Enter URL", "View History", "View Bookmarks", "Help", "Exit").Focus() {
+	case "Enter URL":
+		return ActionAskForURL
+	case "View History":
+		return ActionViewHistory
+	case "View Bookmarks":
+		return ActionViewBookmarks
+	case "Help":
+		return ActionViewHelp
+	case "Exit":
+		return ActionExit
+	}
+	return ActionExit
+}
+
+func handleActionView(state *State, action Action) Action {
+	var vu *url.URL
+	var vr *gemini.Response
+	switch action {
+	case ActionViewHistory:
+		vu, vr = state.History.All()
+	case ActionViewBookmarks:
+		vu, vr = state.Bookmarks.All()
+	case ActionViewHelp:
+		vu, vr = Help()
+	}
+	b, err := NewBrowser(state.Screen, state.Conf.Width, vu, vr.Body)
+	if err != nil {
+		NewOptions(state.Screen, fmt.Sprintf("Error loading %v: %v", b.URL.String(), err), "Continue").Focus()
+		return action
+	}
+	if err = state.History.Add(b); err != nil {
+		NewOptions(state.Screen, fmt.Sprintf("Unable to persist history to disk: %v", err), "OK").Focus()
+	}
+	return ActionDisplay
+}
+
+func handleActionToggleBookmark(state *State) Action {
+	if state.Bookmarks.Contains(state.U) {
+		if NewOptions(state.Screen, fmt.Sprintf("Remove bookmark: %v", state.U), "Yes", "No").Focus() == "Yes" {
+			state.Bookmarks.Remove(state.U)
+		}
+	} else {
+		if NewOptions(state.Screen, fmt.Sprintf("Add bookmark: %v", state.U), "Yes", "No").Focus() == "Yes" {
+			state.Bookmarks.Add(state.U)
+		}
+	}
+	return ActionDisplay
+}
+
+func handleActionAskForURL(state *State) (action Action) {
+	var ok bool
+	state.URL, ok = NewInput(state.Screen, "Enter URL:", state.URL).Focus()
+	if !ok {
+		return ActionHome
+	}
+	var err error
+	state.U, err = url.Parse(state.URL)
+	if err != nil {
+		NewOptions(state.Screen, fmt.Sprintf("Error parsing URL\n\nURL: %v\nMessage: %v", state.URL, err), "Continue").Focus()
+		return ActionAskForURL
+	}
+	return ActionNavigate
+}
+
+func handleActionNavigate(state *State) (action Action) {
+	var certificates []string
+out:
+	for {
+		var ok bool
+		var err error
+		state.Response, certificates, _, ok, err = state.Client.RequestURL(state.Context, state.U)
+		if err != nil {
+			switch NewOptions(state.Screen, fmt.Sprintf("Error making request\n\nURL: %v\nMessage: %v", state.U, err), "Retry", "Cancel").Focus() {
+			case "Retry":
+				continue
+			case "Cancel":
+				break out
+			}
+		}
+		if !ok {
+			// TOFU check required.
+			switch NewOptions(state.Screen, fmt.Sprintf("Accept server certificate?\n  %v", certificates[0]), "Accept (Permanent)", "Accept (Temporary)", "Reject").Focus() {
+			case "Accept (Permanent)":
+				state.Conf.HostCertificates[state.U.Host] = certificates[0]
+				state.Conf.Save()
+				state.Client.AddServerCertificate(state.U.Host, certificates[0])
+				continue
+			case "Accept (Temporary)":
+				state.Client.AddServerCertificate(state.U.Host, certificates[0])
+				continue
+			case "Reject":
+				break out
+			}
+		}
+		break
+	}
+	if state.Response == nil {
+		return ActionGoBack
+	}
+	if strings.HasPrefix(string(state.Response.Header.Code), "3") { // Redirect
+		return handleRedirectResponse(state)
+	}
+	state.RedirectCount = 0
+	if strings.HasPrefix(string(state.Response.Header.Code), "6") { // Client certificate required
+		return handleClientCertificateResponse(state)
+	}
+	if strings.HasPrefix(string(state.Response.Header.Code), "1") { // Input
+		text, ok := NewInput(state.Screen, state.Response.Header.Meta, "").Focus()
+		if !ok {
+			return ActionDisplay
+		}
+		// Post the input back.
+		state.U.RawQuery = url.QueryEscape(text)
+		state.URL = state.U.String()
+		return ActionNavigate
+	}
+	if strings.HasPrefix(string(state.Response.Header.Code), "2") { // Success
+		handleSuccessResponse(state)
+		return ActionDisplay
+	}
+	NewOptions(state.Screen, fmt.Sprintf("Error returned by server\n\nURL: %v\nCode: %v\nMeta: %s", state.U.String(), state.Response.Header.Code, state.Response.Header.Meta), "OK").Focus()
+	return ActionDisplay
+}
+
+func handleActionDisplay(state *State) (action Action) {
+	if state.History.Current() == nil {
+		return ActionHome
+	}
+	browserAction, navigateTo, err := state.History.Current().Focus()
+	if err != nil {
+		NewOptions(state.Screen, fmt.Sprintf("Error displaying URL\n\nURL: %v\nMessage: %v", navigateTo, err), "OK").Focus()
+		return ActionGoBack
+	}
+	if browserAction == ActionNavigate {
+		if navigateTo != nil {
+			if navigateTo.Scheme != "gemini" {
+				if open := NewOptions(state.Screen, fmt.Sprintf("Open in browser?\n\n %v", navigateTo.String()), "Yes", "No").Focus(); open == "Yes" {
+					browser.OpenURL(navigateTo.String())
+				}
+				state.History.Back()
+				return ActionNavigate
+			}
+			state.URL = navigateTo.String()
+			state.U = navigateTo
+		}
+	}
+	return browserAction
+}
+
+func handleClientCertificateResponse(state *State) Action {
+	msg := fmt.Sprintf("The server has requested a certificate\n\nURL: %s\nCode: %s\nMeta: %s", state.U.String(), state.Response.Header.Code, state.Response.Header.Meta)
+	certificateOption := NewOptions(state.Screen, msg, "Create (Permanent)", "Create (Temporary)", "Cancel").Focus()
+	if certificateOption == "Cancel" {
+		return ActionDisplay
+	}
+	permanent := strings.Contains(certificateOption, "Permanent")
+	duration := time.Hour * 24
+	if permanent {
+		duration *= 365 * 200
+	}
+	cert, key, _ := cert.Generate("", "", "", duration)
+	keyPair, err := tls.X509KeyPair(cert, key)
+	if err != nil {
+		NewOptions(state.Screen, fmt.Sprintf("Error creating certificate: %v", err), "Continue").Focus()
+		return ActionDisplay
+	}
+	prefix := ClientCertPrefix(state.U.Scheme + "://" + state.U.Host + state.U.Path)
+	state.Client.AddClientCertificate(string(prefix), keyPair)
+	if permanent {
+		if err = prefix.Save(cert, key); err != nil {
+			NewOptions(state.Screen, fmt.Sprintf("Error saving certificate: %v", err), "Continue").Focus()
+			return ActionDisplay
+		}
+		state.Conf.ClientCertPrefixes[prefix] = struct{}{}
+		if err = state.Conf.Save(); err != nil {
+			NewOptions(state.Screen, fmt.Sprintf("Error saving configuration: %v", err), "Continue").Focus()
+			return ActionDisplay
+		}
+	}
+	return ActionNavigate
+}
+
+func handleRedirectResponse(state *State) Action {
+	state.RedirectCount++
+	if state.RedirectCount >= 5 {
+		if keepTrying := NewOptions(state.Screen, fmt.Sprintf("The server issued 5 redirects, keep trying?"), "Keep Trying", "Cancel").Focus(); keepTrying == "Keep Trying" {
+			state.RedirectCount = 0
+			return ActionNavigate
+		}
+		return ActionDisplay
+	}
+	redirectTo, err := url.Parse(state.Response.Header.Meta)
+	if err != nil {
+		NewOptions(state.Screen, fmt.Sprintf("The server returned an invalid redirect URL\n\nURL: %v\nCode: %v\nMeta: %s", state.U.String(), state.Response.Header.Code, state.Response.Header.Meta), "Cancel").Focus()
+		return ActionDisplay
+	}
+	// Check with the user if the redirect is to another protocol or domain.
+	redirectTo = state.U.ResolveReference(redirectTo)
+	if redirectTo.Scheme != "gemini" {
+		if open := NewOptions(state.Screen, fmt.Sprintf("Follow non-gemini redirect?\n\n %v", redirectTo.String()), "Yes", "No").Focus(); open == "Yes" {
+			browser.OpenURL(redirectTo.String())
+		}
+		return ActionDisplay
+	}
+	if redirectTo.Host != state.U.Host {
+		if open := NewOptions(state.Screen, fmt.Sprintf("Follow cross-domain redirect?\n\n %v", redirectTo.String()), "Yes", "No").Focus(); open == "No" {
+			return ActionAskForURL
+		}
+	}
+	state.URL = redirectTo.String()
+	state.U = redirectTo
+	return ActionNavigate
+}
+
+func handleSuccessResponse(state *State) {
+	meta := state.Response.Header.Meta
+	if meta == "" {
+		meta = "text/gemini; charset=utf-8"
+	}
+	mediaType, params, err := mime.ParseMediaType(meta)
+	if err != nil {
+		NewOptions(state.Screen, fmt.Sprintf("Server returned invalid MIME type: %v", err), "OK").Focus()
+		return
+	}
+	if !(mediaType == "text/gemini" || mediaType == "text/plain") {
+		opts := []string{"Open", "Save", "Cancel"}
+		if !strings.HasPrefix(mediaType, "text/") {
+			opts = []string{"Save", "Cancel"}
+		}
+		fileName := getFileNameFromURL(state.U, mediaType)
+		switch NewOptions(state.Screen, fmt.Sprintf("Server returned a %q file (%v)\n\n%s", meta, fileName, state.U.String()), opts...).Focus() {
+		case "Save":
+			err := atomic.WriteFile(fileName, state.Response.Body)
+			if err != nil {
+				NewOptions(state.Screen, fmt.Sprintf("Failed to save file: %v", err), "OK").Focus()
+			}
+			return
+		case "Cancel":
+			return
+		}
+	}
+	// Use the charset to load the content.
+	var cs string
+	cs, ok := params["charset"]
+	if !ok || cs == "us-ascii" { // Remove us-ascii check at next Go release https://github.com/golang/text/commit/a8b4671254579a87fadf9f7fa577dc7368e9d009
+		cs = "utf-8"
+	}
+	e, err := ianaindex.MIME.Encoding(cs)
+	if err != nil || e == nil {
+		NewOptions(state.Screen, fmt.Sprintf("Unsupported character set %q: %v", cs, err), "OK").Focus()
+		return
+	}
+	r := transform.NewReader(state.Response.Body, e.NewDecoder())
+	b, err := NewBrowser(state.Screen, state.Conf.Width, state.U, r)
+	if err != nil {
+		NewOptions(state.Screen, fmt.Sprintf("Error displaying server response: %v", err), "OK").Focus()
+		return
+	}
+	if err = state.History.Add(b); err != nil {
+		NewOptions(state.Screen, fmt.Sprintf("Unable to persist history to disk: %v", err), "OK").Focus()
+	}
+	return
+}
+
+func getFileNameFromURL(u *url.URL, mimeType string) string {
+	fileName := path.Base(u.String())
+	if fileName == "." {
+		fileName = fmt.Sprintf("download_%d", time.Now().Unix())
+	}
+	if path.Ext(fileName) == "" {
+		extensions, _ := mime.ExtensionsByType(mimeType)
+		if len(extensions) > 0 {
+			fileName += extensions[0]
+		}
+	}
+	return fileName
 }
 
 // flow breaks up text to its maximum width.
@@ -703,15 +774,15 @@ func (o *Options) Focus() string {
 	}
 }
 
-func NewLineConverter(resp *gemini.Response, width int) *LineConverter {
+func NewLineConverter(r io.Reader, width int) *LineConverter {
 	return &LineConverter{
-		Response: resp,
+		Reader:   r,
 		MaxWidth: width,
 	}
 }
 
 type LineConverter struct {
-	Response     *gemini.Response
+	Reader       io.Reader
 	MaxWidth     int
 	preFormatted bool
 }
@@ -740,7 +811,7 @@ func (lc *LineConverter) process(s string) (l Line, isVisualLine bool) {
 }
 
 func (lc *LineConverter) Lines() (lines []Line, err error) {
-	reader := bufio.NewReader(lc.Response.Body)
+	reader := bufio.NewReader(lc.Reader)
 	var s string
 	for {
 		s, err = reader.ReadString('\n')
@@ -848,18 +919,17 @@ func (l QuoteLine) Draw(to tcell.Screen, atX, atY int, highlighted bool) (x, y i
 	return NewText(to, l.Text).WithOffset(atX+2, atY).WithMaxWidth(l.MaxWidth).WithStyle(defaultStyle.Foreground(tcell.ColorLightGrey)).Draw()
 }
 
-func NewBrowser(s tcell.Screen, w int, u *url.URL, resp *gemini.Response) (b *Browser, err error) {
+func NewBrowser(s tcell.Screen, w int, u *url.URL, r io.Reader) (b *Browser, err error) {
 	b = &Browser{
 		Screen:          s,
 		URL:             u,
-		ResponseHeader:  resp.Header,
 		ActiveLineIndex: -1,
 	}
 	maxWidth, _ := s.Size()
 	if maxWidth > w {
 		maxWidth = w
 	}
-	b.Lines, err = NewLineConverter(resp, maxWidth).Lines()
+	b.Lines, err = NewLineConverter(r, maxWidth).Lines()
 	b.calculateLinkIndices()
 	return
 }
@@ -867,7 +937,6 @@ func NewBrowser(s tcell.Screen, w int, u *url.URL, resp *gemini.Response) (b *Br
 type Browser struct {
 	Screen          tcell.Screen
 	URL             *url.URL
-	ResponseHeader  *gemini.Header
 	Lines           []Line
 	ScrollX         int
 	MinScrollX      int
@@ -1458,9 +1527,7 @@ func insert(s string, at int, r rune) string {
 	return prefix + string(r) + suffix
 }
 
-func Help() (u *url.URL, resp *gemini.Response) {
-	u = &url.URL{Scheme: "min", Opaque: "help"}
-	buf := bytes.NewBufferString(`# Help
+const helpText = `# Help
 
 ## Navigation
 
@@ -1507,7 +1574,11 @@ Ctrl-D           Scroll down half a screen
 ## boomarks.tsv
 
 * Stores bookmarks
-`)
+`
+
+func Help() (u *url.URL, resp *gemini.Response) {
+	u = &url.URL{Scheme: "min", Opaque: "help"}
+	buf := bytes.NewBufferString(helpText)
 	resp = &gemini.Response{
 		Header: &gemini.Header{Code: gemini.CodeSuccess},
 		Body:   ioutil.NopCloser(buf),
