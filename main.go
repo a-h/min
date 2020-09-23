@@ -523,21 +523,26 @@ func handleSuccessResponse(state *State) {
 		return
 	}
 	if !(mediaType == "text/gemini" || mediaType == "text/plain") {
-		opts := []string{"Open", "Save", "Cancel"}
-		if !strings.HasPrefix(mediaType, "text/") {
-			opts = []string{"Save", "Cancel"}
-		}
 		fileName := getFileNameFromURL(state.U, mediaType)
-		switch NewOptions(state.Screen, fmt.Sprintf("Server returned a %q file (%v)\n\n%s", meta, fileName, state.U.String()), opts...).Focus() {
-		case "Save":
-			err := atomic.WriteFile(fileName, state.Response.Body)
+		tmp := path.Join(os.TempDir(), fileName)
+		err := atomic.WriteFile(tmp, state.Response.Body)
+		if err != nil {
+			NewOptions(state.Screen, fmt.Sprintf("Failed to save file: %v", err), "OK").Focus()
+			return
+		}
+		switch NewOptions(state.Screen, fmt.Sprintf("Server returned a %q file (%v)\n\n%s", meta, fileName, state.U.String()), "Open", "Keep", "Discard").Focus() {
+		case "Open":
+			browser.OpenFile(tmp)
+		case "Keep":
+			_, err = copy(tmp, fileName)
 			if err != nil {
 				NewOptions(state.Screen, fmt.Sprintf("Failed to save file: %v", err), "OK").Focus()
+				return
 			}
-			return
-		case "Cancel":
-			return
+		case "Discard":
+			os.Remove(tmp)
 		}
+		return
 	}
 	// Use the charset to load the content.
 	var cs string
@@ -560,6 +565,28 @@ func handleSuccessResponse(state *State) {
 		NewOptions(state.Screen, fmt.Sprintf("Unable to persist history to disk: %v", err), "OK").Focus()
 	}
 	return
+}
+
+func copy(src, dst string) (int64, error) {
+	sourceFileStat, err := os.Stat(src)
+	if err != nil {
+		return 0, err
+	}
+	if !sourceFileStat.Mode().IsRegular() {
+		return 0, fmt.Errorf("%s is not a regular file", src)
+	}
+	source, err := os.Open(src)
+	if err != nil {
+		return 0, err
+	}
+	defer source.Close()
+	destination, err := os.Create(dst)
+	if err != nil {
+		return 0, err
+	}
+	defer destination.Close()
+	nBytes, err := io.Copy(destination, source)
+	return nBytes, err
 }
 
 func getFileNameFromURL(u *url.URL, mimeType string) string {

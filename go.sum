@@ -1,6 +1,4 @@
 github.com/DATA-DOG/go-sqlmock v1.3.3/go.mod h1:f/Ixk793poVmq4qj/V1dPUg2JEAKC73Q5eFN3EC/SaM=
-github.com/a-h/gemini v0.0.14 h1:p3ZJOv4Fqu34P7P2B080B+nnBJSbEtnOwhkZQNZOpoY=
-github.com/a-h/gemini v0.0.14/go.mod h1:p9wvIRDc2s3Lnbkw7CgNzDNgJHPuXDwh3dOF7w0NT8s=
 github.com/a-h/gemini v0.0.44 h1:mK+WFhHVoGxRtR9Z3/1Lc5wqLgkkR966Xcm41V54Rb0=
 github.com/a-h/gemini v0.0.44/go.mod h1:PatDaeVQiNS3FNRktd3EwcL/0Vr6D/FgSBnq/8oIJt8=
 github.com/gdamore/encoding v1.0.0 h1:+7OoQ1Bc6eTm5niUzBa0Ctsh6JbMW6Ra+YNuAtDBdko=
