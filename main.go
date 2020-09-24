@@ -32,6 +32,8 @@ import (
 	"golang.org/x/text/transform"
 )
 
+var version string
+
 type ClientCertPrefix string
 
 func (cc ClientCertPrefix) fileName() string {
@@ -149,6 +151,11 @@ var defaultStyle = tcell.StyleDefault.
 	Background(tcell.ColorBlack)
 
 func main() {
+	if strings.TrimLeft(os.Args[1], "-") == "version" {
+		fmt.Println(version)
+		return
+	}
+
 	// Configure the context to handle SIGINT.
 	ctx, cancel := context.WithCancel(context.Background())
 	c := make(chan os.Signal)
