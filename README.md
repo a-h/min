@@ -8,7 +8,24 @@ A Gemini browser for your terminal.
 
 Download the compiled binary for your platform at https://github.com/a-h/min/releases
 
-If you're using a Raspberry Pi you probably want the ARM v6 binary, even if you're on a Pi 4. I've tested the ARM v6 build on a Pi Zero running Raspbian, and a Pi 4 running Ubuntu and it worked without problems there.
+If you're using a Raspberry Pi you probably want the ARM v6 binary, even if you're on a Pi 4.
+
+Tested on:
+
+* Mac
+* FreeBSD (x86_64)
+* Linux (Arm)
+  * Pi Zero running Raspbian
+  * Pi 4 running Ubuntu
+
+## Building from source
+
+Requires Go 1.15, but no other build dependencies are required.
+
+```
+# requires go 1.15
+go build
+```
 
 ## Features
 
