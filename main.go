@@ -151,7 +151,7 @@ var defaultStyle = tcell.StyleDefault.
 	Background(tcell.ColorBlack)
 
 func main() {
-	if strings.TrimLeft(os.Args[1], "-") == "version" {
+	if len(os.Args) > 1 && strings.TrimLeft(os.Args[1], "-") == "version" {
 		fmt.Println(version)
 		return
 	}
@@ -198,7 +198,7 @@ func main() {
 
 	// State.
 	state := &State{
-		URL:       strings.Join(os.Args[1:], ""),
+		URL:       conf.Home,
 		History:   h,
 		Bookmarks: b,
 		Conf:      conf,
@@ -206,9 +206,8 @@ func main() {
 	}
 
 	// Use a URL passed via the command-line URL, if provided.
-	state.URL = strings.Join(os.Args[1:], "")
-	if state.URL == "" {
-		state.URL = conf.Home
+	if len(os.Args) > 1 {
+		state.URL = strings.Join(os.Args[1:], "")
 	}
 
 	// Create client.
