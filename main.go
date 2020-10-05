@@ -1472,6 +1472,11 @@ func (o *Input) Focus() (text string, ok bool) {
 						o.CursorIndex--
 						o.Text = cut(o.Text, o.CursorIndex)
 					}
+				case tcell.KeyBackspace2:
+					if o.CursorIndex > 0 {
+						o.CursorIndex--
+						o.Text = cut(o.Text, o.CursorIndex)
+					}
 				case tcell.KeyLeft:
 					if o.CursorIndex > 0 {
 						o.CursorIndex--
