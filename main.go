@@ -755,7 +755,7 @@ func (o *Options) Draw() {
 	for i, oo := range o.Options {
 		style := defaultStyle
 		if i == o.ActiveIndex {
-			style = defaultStyle.Background(tcell.ColorLightGray)
+			style = defaultStyle.Background(tcell.ColorGray)
 		}
 		NewText(o.Screen, fmt.Sprintf("[ %s ]", oo)).WithOffset(1, i+y+2).WithStyle(style).Draw()
 	}
@@ -1424,7 +1424,7 @@ func (o *Input) Draw() {
 		o.Screen.HideCursor()
 	}
 
-	activeStyle := defaultStyle.Background(tcell.ColorLightGray)
+	activeStyle := defaultStyle.Background(tcell.ColorGray)
 	okStyle := defaultStyle
 	if o.ActiveIndex == 1 {
 		okStyle = activeStyle
