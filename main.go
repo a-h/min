@@ -963,6 +963,7 @@ func NewBrowser(s tcell.Screen, w int, u *url.URL, r io.Reader) (b *Browser, err
 		maxWidth = w
 	}
 	b.Lines, err = NewLineConverter(r, maxWidth).Lines()
+	b.LineYIndices = make([]int, len(b.Lines))
 	b.calculateLinkIndices()
 	return
 }
@@ -977,6 +978,7 @@ type Browser struct {
 	MinScrollY      int
 	LinkLineIndices []int
 	ActiveLineIndex int
+	LineYIndices    []int
 }
 
 func (b *Browser) ScrollLeft(by int) {
@@ -1038,6 +1040,7 @@ func (b *Browser) PreviousLink() {
 	if len(b.LinkLineIndices) == 0 {
 		return
 	}
+	defer b.ScrollToLink()
 	if b.ActiveLineIndex < 0 {
 		b.ActiveLineIndex = b.LinkLineIndices[len(b.LinkLineIndices)-1]
 		return
@@ -1059,6 +1062,7 @@ func (b *Browser) NextLink() {
 	if len(b.LinkLineIndices) == 0 {
 		return
 	}
+	defer b.ScrollToLink()
 	if b.ActiveLineIndex < 0 {
 		b.ActiveLineIndex = b.LinkLineIndices[0]
 		return
@@ -1076,6 +1080,17 @@ func (b *Browser) NextLink() {
 	b.ActiveLineIndex = b.LinkLineIndices[curIndex+1]
 }
 
+func (b *Browser) ScrollToLink() {
+	lineYIndex := b.LineYIndices[b.ActiveLineIndex]
+	_, h := b.Screen.Size()
+	if lineYIndex >= h {
+		b.ScrollDown(lineYIndex - h + 1)
+	}
+	if lineYIndex < 0 {
+		b.ScrollUp(lineYIndex*-1 + h)
+	}
+}
+
 func (b *Browser) Draw() {
 	b.Screen.Clear()
 	var maxX int
@@ -1083,6 +1098,7 @@ func (b *Browser) Draw() {
 	y := b.ScrollY
 	for lineIndex, line := range b.Lines {
 		highlighted := lineIndex == b.ActiveLineIndex
+		b.LineYIndices[lineIndex] = y
 		xx, yy := line.Draw(b.Screen, x, y, highlighted)
 		if xx > maxX {
 			maxX = xx
