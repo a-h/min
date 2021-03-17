@@ -150,6 +150,10 @@ var defaultStyle = tcell.StyleDefault.
 	Foreground(tcell.ColorWhite).
 	Background(tcell.ColorBlack)
 
+var preformattedStyle = tcell.StyleDefault.
+	Foreground(tcell.ColorGray).
+	Background(tcell.ColorBlack)
+
 func main() {
 	if len(os.Args) > 1 && strings.TrimLeft(os.Args[1], "-") == "version" {
 		fmt.Println(version)
@@ -720,6 +724,74 @@ func (t *Text) Draw() (x, y int) {
 	return requiredMaxWidth, y
 }
 
+type Choice struct {
+	Index  int
+	Option string
+}
+
+func ChoiceOptionIndex(options ...string) (op []string) {
+	op = make([]string, len(options))
+	for i := range options {
+		op[i] = strconv.FormatInt(int64(i), 10)
+	}
+	return op
+}
+
+func choiceIndex(options []string, s string) (index int, matchesPrefix bool) {
+	index = -1
+	for i, c := range options {
+		if c == s {
+			index = i
+			continue
+		}
+		if strings.HasPrefix(c, s) {
+			matchesPrefix = true
+		}
+	}
+	return
+}
+
+func NewChoice(options ...string) (runes chan rune, selection chan Choice, closer func()) {
+	var buffer string
+	runes = make(chan rune)
+	selection = make(chan Choice)
+
+	var ctx context.Context
+	ctx, closer = context.WithCancel(context.Background())
+	go func(ctx context.Context) {
+		defer close(runes)
+		defer close(selection)
+		index := -1
+		var matchesPrefix bool
+		for {
+			select {
+			case <-time.After(time.Millisecond * 200):
+				if index > -1 {
+					selection <- Choice{Index: index, Option: options[index]}
+					index = -1
+				}
+				buffer = ""
+			case r := <-runes:
+				buffer += string(r)
+				index, matchesPrefix = choiceIndex(options, buffer)
+				if index < 0 {
+					buffer = ""
+					continue
+				}
+				if matchesPrefix {
+					continue // Wait to see if any more is typed in.
+				}
+				selection <- Choice{Index: index, Option: options[index]}
+				index = -1
+				buffer = ""
+			case <-ctx.Done():
+				return
+			}
+		}
+	}(ctx)
+	return
+}
+
 func NewOptions(s tcell.Screen, msg string, opts ...string) *Options {
 	cancelIndex := -1
 	for i, o := range opts {
@@ -754,10 +826,12 @@ func (o *Options) Draw() {
 	_, y := t.Draw()
 	for i, oo := range o.Options {
 		style := defaultStyle
+		var prefix = " "
 		if i == o.ActiveIndex {
 			style = defaultStyle.Background(tcell.ColorGray)
+			prefix = ">"
 		}
-		NewText(o.Screen, fmt.Sprintf("[ %s ]", oo)).WithOffset(1, i+y+2).WithStyle(style).Draw()
+		NewText(o.Screen, fmt.Sprintf("%s [%d] %s", prefix, i, oo)).WithOffset(1, i+y+2).WithStyle(style).Draw()
 	}
 }
 
@@ -778,6 +852,14 @@ func (o *Options) Down() {
 }
 
 func (o *Options) Focus() string {
+	runes, selection, closer := NewChoice(ChoiceOptionIndex(o.Options...)...)
+	defer closer()
+	go func() {
+		for choice := range selection {
+			o.ActiveIndex = choice.Index
+			o.Screen.PostEvent(nil)
+		}
+	}()
 	o.Draw()
 	o.Screen.Show()
 	for {
@@ -798,6 +880,8 @@ func (o *Options) Focus() string {
 				if o.CancelIndex > -1 {
 					return o.Options[o.CancelIndex]
 				}
+			case tcell.KeyRune:
+				runes <- ev.Rune()
 			case tcell.KeyEnter:
 				return o.Options[o.ActiveIndex]
 			}
@@ -888,7 +972,7 @@ func (l PreformattedTextLine) Draw(to tcell.Screen, atX, atY int, highlighted bo
 			c = ' '
 			w = 1
 		}
-		to.SetContent(atX, atY, c, comb, defaultStyle)
+		to.SetContent(atX, atY, c, comb, preformattedStyle)
 		atX += w
 	}
 	return atX, atY
@@ -1157,6 +1241,9 @@ func (b *Browser) Focus() (next Action, navigateTo *url.URL, err error) {
 			case tcell.KeyCtrlH:
 				next = ActionViewHistory
 				return
+			case tcell.KeyCtrlL:
+				next = ActionAskForURL
+				return
 			case tcell.KeyRune:
 				switch ev.Rune() {
 				case 'b':
@@ -1164,6 +1251,8 @@ func (b *Browser) Focus() (next Action, navigateTo *url.URL, err error) {
 					return
 				case 'B':
 					next = ActionViewBookmarks
+					return
+				case 'q':
 					return
 				case 'g':
 					b.ScrollY = 0
@@ -1551,6 +1640,11 @@ func (o *Input) Focus() (text string, ok bool) {
 				}
 			case tcell.KeyEscape:
 				return o.Text, false
+			case tcell.KeyRune:
+				switch ev.Rune() {
+				case 'q':
+					return o.Text, false
+				}
 			}
 		}
 		o.Draw()
