@@ -8,5 +8,5 @@ require (
 	github.com/mattn/go-runewidth v0.0.13
 	github.com/natefinch/atomic v0.0.0-20200526193002-18c0533a5b09
 	github.com/pkg/browser v0.0.0-20180916011732-0a3d74bf9ce4
-	golang.org/x/text v0.3.3
+	golang.org/x/text v0.3.6
 )
